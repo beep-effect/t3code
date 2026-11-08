@@ -75,7 +75,9 @@ export interface IssuedBearerSession {
 
 // MCP client tokens are restricted to /mcp; HTTP API and WebSocket RPC would bypass their access cap.
 const MCP_CLIENT_SUBJECT = "mcp-client";
-const MCP_CLIENT_SESSION_TTL = Duration.days(30);
+// 180 days: MCP clients and environment links have no refresh grant, so each expiry means a
+// manual re-approval on every machine; revocation under Sharing & access stays immediate.
+const MCP_CLIENT_SESSION_TTL = Duration.days(180);
 
 export interface McpClientSession {
   readonly sessionId: AuthSessionId;
