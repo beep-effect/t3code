@@ -123,6 +123,34 @@ describe("ACP Registry probe", () => {
     ]);
   });
 
+  it("treats legacy terminal-auth meta as terminal auth only when well formed", () => {
+    const legacy = (meta: Schema.Json) => ({
+      id: "login",
+      name: "Login with Kimi account",
+      _meta: { "terminal-auth": meta },
+    });
+    const methods = normalizeAcpRegistryAuthMethods(
+      [
+        legacy({ command: "kimi", args: ["login"], env: { A: "b c" }, type: "terminal" }),
+        legacy({ command: "kimi", args: "login" }),
+        legacy({ command: "kimi", args: ["login", 1] }),
+        legacy({ command: "kimi", args: ["login"], env: { A: 1 } }),
+        legacy({ command: "kimi", args: ["login"], type: "agent" }),
+        legacy("kimi login"),
+      ],
+      { command: "/managed/kimi", args: ["acp"] },
+    );
+
+    expect(methods.map((method) => [method.type, method.command])).toEqual([
+      ["terminal", "A='b c' /managed/kimi login"],
+      ["agent", undefined],
+      ["agent", undefined],
+      ["agent", undefined],
+      ["agent", undefined],
+      ["agent", undefined],
+    ]);
+  });
+
   it("omits unsafe truncated auth commands instead of publishing broken shell", () => {
     const methods = normalizeAcpRegistryAuthMethods(
       [
