@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  ExecutionEnvironmentPlatformOs,
   ServerConfig,
   ServerInstallation,
   ServerSelfUpdateCapability,
@@ -95,13 +96,28 @@ export function supportsDesktopAppUpdate(
   return serverConfig?.environment.capabilities.desktopAppUpdate === true;
 }
 
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+/** Windows hosts get PowerShell quoting, as the server's own copyable `t3` commands do. */
+const powershellQuote = (value: string) =>
+  `"${value
+    .replaceAll("`", "``")
+    .replaceAll("$", "`$")
+    .replace(/["\u201C\u201D\u201E]/g, "$&$&")}"`;
+
 export function manualServerUpdateCommand(
   targetVersion: string,
   installation?: ServerInstallation,
+  hostOs?: ExecutionEnvironmentPlatformOs,
 ): string {
+  const quote = hostOs === "windows" ? powershellQuote : shellQuote;
   if (installation?.kind === "npm-global") {
-    const prefix = `'${installation.prefix.replaceAll("'", "'\\''")}'`;
-    return `npm install --global --prefix ${prefix} t3@${targetVersion}`;
+    return `npm install --global --prefix ${quote(installation.prefix)} t3@${targetVersion}`;
+  }
+  if (installation?.kind === "standalone") {
+    return installation.baseDir === undefined
+      ? `t3 update ${targetVersion}`
+      : `t3 update --base-dir ${quote(installation.baseDir)} ${targetVersion}`;
   }
   const runner =
     installation?.kind === "pnpm-dlx" ? "pnpm dlx" : installation?.kind === "bunx" ? "bunx" : "npx";

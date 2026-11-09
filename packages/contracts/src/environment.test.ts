@@ -16,7 +16,12 @@ const descriptor = {
 describe("ExecutionEnvironmentDescriptor", () => {
   it("decodes old, recognized and future manual installation descriptors", () => {
     expect(decodeDescriptor(descriptor).capabilities.serverInstallation).toBeUndefined();
-    for (const installation of [{ kind: "npx" }, { kind: "npm-global", prefix: "/opt/node" }]) {
+    for (const installation of [
+      { kind: "npx" },
+      { kind: "npm-global", prefix: "/opt/node" },
+      { kind: "standalone" },
+      { kind: "standalone", baseDir: "/srv/t3" },
+    ]) {
       expect(
         decodeDescriptor({
           ...descriptor,

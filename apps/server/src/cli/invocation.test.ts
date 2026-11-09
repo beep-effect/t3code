@@ -6,6 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { pinnedRuntimePaths } from "../cloud/pinnedRuntime.ts";
 import {
   resolveHostCliCommand,
   resolveRootCliCommand,
@@ -180,7 +181,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
           `{"name":"t3","version":"${packageJson.version}","bin":{"t3":"./bin/t3.mjs"}}`,
         );
         const launchedBy = entry.endsWith("t3.mjs");
-        const installation = yield* resolveServerInstallation.pipe(
+        const installation = yield* resolveServerInstallation(path.join(root, ".t3")).pipe(
           Effect.provideService(HostProcess.Arguments, [launchedBy ? executable : "node", entry]),
           Effect.provideService(HostProcess.ExecutablePath, executable),
           Effect.provideService(HostProcess.IsExecutable, launchedBy),
@@ -210,7 +211,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         path.join(packageRoot, "package.json"),
         '{"name":"t3","version":"0.0.45","bin":{"t3":"./dist/bin.mjs"}}',
       );
-      const resolve = resolveServerInstallation.pipe(
+      const resolve = resolveServerInstallation(path.join(root, ".t3")).pipe(
         Effect.provideService(HostProcess.Arguments, ["node", entry]),
         Effect.provideService(HostProcess.IsExecutable, false),
         Effect.provideService(HostProcess.Platform, "linux"),
@@ -233,22 +234,29 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       const prefix = path.join(root, "bunx-tools");
       const packageRoot = path.join(prefix, "lib/node_modules/t3");
       const launcher = path.join(packageRoot, "bin/t3.mjs");
-      const executable = path.join(root, ".t3/runtime/versions/1.0.0/t3");
+      const executable = pinnedRuntimePaths(
+        path,
+        path.join(root, ".t3"),
+        packageJson.version,
+        "linux",
+      ).entryPath;
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
       yield* fs.makeDirectory(path.join(prefix, "bin"));
       yield* fs.writeFileString(launcher, "");
       yield* fs.writeFileString(executable, "");
       yield* fs.symlink(launcher, path.join(prefix, "bin/t3"));
-      const resolve = resolveServerInstallation.pipe(
+      const resolve = resolveServerInstallation(path.join(root, ".t3")).pipe(
         Effect.provideService(HostProcess.ExecutablePath, executable),
         Effect.provideService(HostProcess.Arguments, [executable, executable]),
         Effect.provideService(HostProcess.IsExecutable, true),
         Effect.provideService(HostProcess.Platform, "linux"),
+        Effect.provideService(HostProcess.HomeDirectory, root),
         Effect.provideService(HostProcess.Environment, { T3CODE_NPM_LAUNCHER_PATH: launcher }),
       );
+      // A launcher from another version is ignored, which leaves this home's runtime.
       for (const [version, expected] of [
-        ["0.0.1", null],
+        ["0.0.1", { kind: "standalone" }],
         [packageJson.version, { kind: "npm-global", prefix }],
       ] as const) {
         yield* fs.writeFileString(
@@ -260,7 +268,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
     }),
   );
 
-  it.effect("leaves local, standalone, missing and unreadable installs unknown", () =>
+  it.effect("leaves local, unpinned, missing and unreadable installs unknown", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -277,12 +285,49 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
           yield* fs.writeFileString(entry, "");
         }
         expect(
-          yield* resolveServerInstallation.pipe(
+          yield* resolveServerInstallation(path.join(root, ".t3")).pipe(
             Effect.provideService(HostProcess.Arguments, ["node", entry]),
             Effect.provideService(HostProcess.IsExecutable, false),
           ),
         ).toBeNull();
       }
+    }),
+  );
+
+  it.effect("recognizes only this T3 home's standalone runtime for the running version", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const defaultHome = path.join(root, ".t3");
+      const otherHome = path.join(root, "srv/t3");
+      const runtime = (baseDir: string, version: string, platform: NodeJS.Platform = "linux") =>
+        pinnedRuntimePaths(path, baseDir, version, platform).entryPath;
+      const current = runtime(defaultHome, packageJson.version);
+      const windows = runtime(defaultHome, packageJson.version, "win32");
+      const older = runtime(defaultHome, "0.0.1");
+      const custom = runtime(otherHome, packageJson.version);
+      for (const file of [current, windows, older, custom]) {
+        yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+        yield* fs.writeFileString(file, "");
+      }
+      const command = path.join(root, ".local/bin/t3");
+      yield* fs.makeDirectory(path.dirname(command), { recursive: true });
+      yield* fs.symlink(current, command);
+      const resolve = (executable: string, baseDir: string, platform: NodeJS.Platform = "linux") =>
+        resolveServerInstallation(baseDir).pipe(
+          Effect.provideService(HostProcess.ExecutablePath, executable),
+          Effect.provideService(HostProcess.Arguments, [executable, "serve"]),
+          Effect.provideService(HostProcess.IsExecutable, true),
+          Effect.provideService(HostProcess.Platform, platform),
+          Effect.provideService(HostProcess.HomeDirectory, root),
+          Effect.provideService(HostProcess.Environment, {}),
+        );
+      expect(yield* resolve(command, defaultHome)).toEqual({ kind: "standalone" });
+      expect(yield* resolve(windows, defaultHome, "win32")).toEqual({ kind: "standalone" });
+      expect(yield* resolve(custom, otherHome)).toEqual({ kind: "standalone", baseDir: otherHome });
+      expect(yield* resolve(older, defaultHome)).toBeNull();
+      expect(yield* resolve(current, otherHome)).toBeNull();
     }),
   );
 });
