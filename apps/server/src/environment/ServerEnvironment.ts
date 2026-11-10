@@ -200,7 +200,8 @@ export const make = Effect.gen(function* () {
     desktopManaged: serverConfig.mode === "desktop",
     launcherManaged: launcher.managed,
   });
-  const serverInstallation = serverSelfUpdate === null ? yield* resolveServerInstallation : null;
+  const serverInstallation =
+    serverSelfUpdate === null ? yield* resolveServerInstallation(serverConfig.baseDir) : null;
   // Desktop and server ship together; a control fd guarantees requestDesktopUpdate support.
 
   const desktopAppUpdate =

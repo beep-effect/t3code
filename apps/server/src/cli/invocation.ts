@@ -9,6 +9,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { pinnedRuntimePaths } from "../cloud/pinnedRuntime.ts";
 
 export type CliRunner = "npx" | "pnpm dlx" | "bunx";
 
@@ -62,37 +63,49 @@ export const resolveEntryPath = Effect.gen(function* () {
   return (yield* HostProcess.Arguments)[1] ?? "";
 });
 
-export const resolveServerInstallation = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const platform = yield* HostProcess.Platform;
-  const entry = yield* fs.realPath(yield* resolveEntryPath);
-  const match = /^(.*)\/lib\/node_modules\/t3\/(?:dist\/bin\.mjs|bin\/t3\.mjs)$/.exec(entry);
-  if (!match) {
-    const runner = detectCliRunner(entry);
-    return runner === null
-      ? null
-      : ({ kind: runner === "pnpm dlx" ? "pnpm-dlx" : runner } satisfies ServerInstallation);
-  }
-  if (platform === "win32") return null;
-  const prefix = match[1] || "/";
-  if (
-    prefix.includes("/node_modules/") ||
-    /\/(?:Cellar|Caskroom)\//i.test(prefix) ||
-    /\/mise\/installs\/(?!node\/)[^/]+\//.test(prefix)
-  )
-    return null;
+/** `baseDir` is this server's T3 home, whose runtime for this version `t3 update` replaces. */
+export const resolveServerInstallation = Effect.fn("invocation.resolveServerInstallation")(
+  function* (baseDir: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const platform = yield* HostProcess.Platform;
+    const entry = yield* fs.realPath(yield* resolveEntryPath);
+    const match = /^(.*)\/lib\/node_modules\/t3\/(?:dist\/bin\.mjs|bin\/t3\.mjs)$/.exec(entry);
+    if (!match) {
+      const runner = detectCliRunner(entry);
+      if (runner !== null) {
+        return { kind: runner === "pnpm dlx" ? "pnpm-dlx" : runner } satisfies ServerInstallation;
+      }
+      const runtime = pinnedRuntimePaths(path, baseDir, packageJson.version, platform).entryPath;
+      if (entry !== (yield* fs.realPath(runtime))) return null;
+      const defaultBaseDir = path.join(yield* HostProcess.HomeDirectory, ".t3");
+      return (
+        path.resolve(baseDir) === path.resolve(defaultBaseDir)
+          ? { kind: "standalone" }
+          : { kind: "standalone", baseDir }
+      ) satisfies ServerInstallation;
+    }
+    if (platform === "win32") return null;
+    const prefix = match[1] || "/";
+    if (
+      prefix.includes("/node_modules/") ||
+      /\/(?:Cellar|Caskroom)\//i.test(prefix) ||
+      /\/mise\/installs\/(?!node\/)[^/]+\//.test(prefix)
+    )
+      return null;
 
-  const packageRoot = path.join(prefix, "lib/node_modules/t3");
-  const manifest = yield* fs
-    .readFileString(path.join(packageRoot, "package.json"))
-    .pipe(Effect.flatMap(decodeInstallManifest));
-  if (manifest.name !== "t3" || !manifest.bin) return null;
-  const bin = yield* fs.realPath(path.join(packageRoot, manifest.bin.t3));
-  const globalBin = yield* fs.realPath(path.join(prefix, "bin/t3"));
-  if (globalBin !== bin || bin !== entry) return null;
-  return { kind: "npm-global", prefix } satisfies ServerInstallation;
-}).pipe(Effect.orElseSucceed(() => null));
+    const packageRoot = path.join(prefix, "lib/node_modules/t3");
+    const manifest = yield* fs
+      .readFileString(path.join(packageRoot, "package.json"))
+      .pipe(Effect.flatMap(decodeInstallManifest));
+    if (manifest.name !== "t3" || !manifest.bin) return null;
+    const bin = yield* fs.realPath(path.join(packageRoot, manifest.bin.t3));
+    const globalBin = yield* fs.realPath(path.join(prefix, "bin/t3"));
+    if (globalBin !== bin || bin !== entry) return null;
+    return { kind: "npm-global", prefix } satisfies ServerInstallation;
+  },
+  Effect.orElseSucceed(() => null),
+);
 
 /** The original package spec is unavailable at startup; infer its channel from the version. */
 function suggestedPackageSpec(version: string): string {

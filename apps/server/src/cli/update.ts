@@ -346,6 +346,15 @@ const belongsToBootService = Effect.fn("cli.update.belongs_to_boot_service")(fun
   return false;
 });
 
+/** service.env pins the service's release source; a shell running `t3 update` does not load it. */
+const serviceReleaseBaseUrl = Effect.fn("cli.update.service_release_base_url")(
+  function* (baseDir: string) {
+    const { entries } = yield* CliService.readServiceEnv(baseDir);
+    return entries[CLI_RELEASE_BASE_URL_ENV]?.trim() || undefined;
+  },
+  Effect.orElseSucceed(() => undefined),
+);
+
 export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly baseDir: string;
   readonly logsDir: string;
@@ -492,6 +501,10 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     }
   }
 
+  const releaseBaseUrl =
+    mirror?.feedUrl ??
+    (environment[CLI_RELEASE_BASE_URL_ENV]?.trim() ||
+      (yield* serviceReleaseBaseUrl(input.baseDir)));
   const runtime = yield* ensurePinnedRuntimeInstalled({
     onProgress: progress.report,
     baseDir: input.baseDir,
@@ -502,7 +515,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     httpClient,
     platform,
     arch,
-    releaseBaseUrl: mirror?.feedUrl ?? (environment[CLI_RELEASE_BASE_URL_ENV]?.trim() || undefined),
+    releaseBaseUrl,
     requirePublishedRelease: mirror !== undefined,
     validate: (paths) =>
       runner

@@ -530,3 +530,97 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
     ),
   );
 });
+
+it.layer(NodeServices.layer)("t3 update release source", (it) => {
+  it.effect("falls back to the release source service.env pins after the policy and shell", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const pinned = "T3CODE_RELEASE_BASE_URL=https://pinned.example/t3\n";
+      // `null` makes service.env unreadable.
+      const downloadOrigins = (input: {
+        readonly serviceEnv: string | null | undefined;
+        readonly environment: NodeJS.ProcessEnv;
+        readonly feedUrl?: string;
+      }) =>
+        Effect.gen(function* () {
+          const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+          const serviceEnvPath = path.join(baseDir, "service.env");
+          if (input.serviceEnv === null) yield* fs.makeDirectory(serviceEnvPath);
+          else if (input.serviceEnv !== undefined) {
+            yield* fs.writeFileString(serviceEnvPath, input.serviceEnv);
+          }
+          const requested: string[] = [];
+          yield* runUpdate({
+            baseDir,
+            logsDir: baseDir,
+            serverRuntimeStatePath: path.join(baseDir, "server-runtime.json"),
+            channel: undefined,
+            requestedVersion: "99.0.0",
+            allowDowngrade: false,
+            assumeYes: true,
+          }).pipe(
+            Effect.flip,
+            Effect.provide(
+              Layer.mergeAll(
+                Layer.mock(BootService.BootService, {
+                  status: Effect.succeed<BootService.BootServiceStatus>({
+                    supported: false,
+                    installed: false,
+                    current: false,
+                    unitPath: path.join(baseDir, "t3code.service"),
+                    logPath: path.join(baseDir, "boot-service.log"),
+                  }),
+                }),
+                Layer.mock(ProcessRunner.ProcessRunner, {}),
+                ManagedPolicy.layerTest(
+                  input.feedUrl === undefined
+                    ? undefined
+                    : {
+                        schemaVersion: 1,
+                        organization: "Example Corp",
+                        limits: { updates: { mode: "auto", feedUrl: input.feedUrl } },
+                      },
+                ),
+                Layer.succeed(
+                  HttpClient.HttpClient,
+                  HttpClient.make((request) => {
+                    requested.push(new URL(request.url).origin);
+                    return Effect.succeed(
+                      HttpClientResponse.fromWeb(request, new Response("", { status: 404 })),
+                    );
+                  }),
+                ),
+              ),
+            ),
+            Effect.provideService(HostProcess.Environment, input.environment),
+          );
+          return requested;
+        }).pipe(Effect.scoped);
+
+      const shell = { T3CODE_RELEASE_BASE_URL: "https://shell.example/t3" };
+      assert.deepStrictEqual(yield* downloadOrigins({ serviceEnv: pinned, environment: {} }), [
+        "https://pinned.example",
+      ]);
+      assert.deepStrictEqual(yield* downloadOrigins({ serviceEnv: pinned, environment: shell }), [
+        "https://shell.example",
+      ]);
+      assert.deepStrictEqual(
+        yield* downloadOrigins({
+          serviceEnv: pinned,
+          environment: shell,
+          feedUrl: "https://updates.example.com/t3code",
+        }),
+        ["https://updates.example.com"],
+      );
+      for (const serviceEnv of [undefined, null]) {
+        assert.deepStrictEqual(yield* downloadOrigins({ serviceEnv, environment: {} }), [
+          "https://github.com",
+        ]);
+      }
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.Architecture, "x64"),
+    ),
+  );
+});

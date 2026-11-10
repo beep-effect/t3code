@@ -64,6 +64,11 @@ export type ServerSelfUpdateMethod = typeof ServerSelfUpdateMethod.Type;
 export const ServerInstallation = Schema.Union([
   Schema.Struct({ kind: Schema.Literals(["npx", "pnpm-dlx", "bunx"]) }),
   Schema.Struct({ kind: Schema.Literal("npm-global"), prefix: TrimmedNonEmptyString }),
+  /** The install script's runtime; `baseDir` is sent only for a T3 home other than the default. */
+  Schema.Struct({
+    kind: Schema.Literal("standalone"),
+    baseDir: Schema.optionalKey(TrimmedNonEmptyString),
+  }),
 ]);
 export type ServerInstallation = typeof ServerInstallation.Type;
 
