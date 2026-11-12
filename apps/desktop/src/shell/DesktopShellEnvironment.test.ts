@@ -379,6 +379,54 @@ describe("DesktopShellEnvironment", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("never restores or caches a previous launch's AppImage mount on PATH", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped();
+      const cachePath = `${stateDir}/shell-environment-cache.json`;
+      yield* fs.writeFileString(
+        cachePath,
+        encodeCache({
+          version: 1,
+          key: '["linux","/test-home","/bin/zsh",""]',
+          environment: { PATH: "/cached/bin:/tmp/.mount_T3-CodOld:/tmp/.mount_T3-CodOld/usr/sbin" },
+        }),
+      );
+      const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/tmp/.mount_T3-CodNew:/usr/bin" };
+      const release = yield* Deferred.make<void>();
+      const prepared = yield* runShellEnvironment({
+        env,
+        stateDir,
+        platform: "linux",
+        handler: () => "",
+        processSpawner: ChildProcessSpawner.make(() =>
+          Deferred.await(release).pipe(
+            Effect.as(
+              makeProcess(
+                envOutput({ PATH: "/fresh/bin:/tmp/.mount_T3-CodNew/usr/sbin:/usr/bin" }),
+              ),
+            ),
+          ),
+        ),
+        use: (service) =>
+          Effect.gen(function* () {
+            yield* service.installIntoProcess;
+            assert.equal(env.PATH, "/cached/bin:/tmp/.mount_T3-CodNew:/usr/bin");
+            yield* Deferred.succeed(release, undefined);
+            return yield* service.awaitDiscovery;
+          }),
+      });
+      assert.isTrue(prepared);
+      // The live mount stays usable for this launch through the inherited PATH.
+      assert.equal(
+        env.PATH,
+        "/fresh/bin:/tmp/.mount_T3-CodNew/usr/sbin:/usr/bin:/tmp/.mount_T3-CodNew",
+      );
+      const cached = yield* fs.readFileString(cachePath).pipe(Effect.flatMap(decodeCache));
+      assert.equal(cached.environment.PATH, "/fresh/bin:/usr/bin");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("cancels background discovery when the application scope closes", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
