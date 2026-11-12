@@ -202,10 +202,11 @@ export const make = Effect.gen(function* () {
   });
   const serverInstallation =
     serverSelfUpdate === null ? yield* resolveServerInstallation(serverConfig.baseDir) : null;
-  // Desktop and server ship together; a control fd guarantees requestDesktopUpdate support.
-
+  // The desktop reports whether it can install updates; requests travel over its control fd.
   const desktopAppUpdate =
-    serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
+    serverSelfUpdate === "desktop-managed" &&
+    serverConfig.desktopAppUpdate === true &&
+    serverConfig.desktopTelemetryControlFd !== undefined;
 
   const databaseMigration = databaseMigrationHead(serverConfig.dbPath);
   const descriptor: ExecutionEnvironmentDescriptor = {
@@ -290,6 +291,9 @@ export const make = Effect.gen(function* () {
       mcpModeLimitHeader: true,
       linkFence: true,
       mcpApprovalCodes: true,
+      mcpHostedApproval: true,
+      shellThreadFamilies: true,
+      shellOlderSettled: true,
     },
   };
 
