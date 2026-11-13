@@ -271,13 +271,13 @@ export function ServerUpdateAction({
   appearance = "button",
 }: ServerUpdateTarget & UpdateButtonProps) {
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
-  const environment = useServerConfigs().get(environmentId)?.environment;
-  const serverVersion = environment?.serverVersion;
+  const serverVersion = useServerConfigs().get(environmentId)?.environment.serverVersion;
   const sessionStateAtom = environmentSession.sessionStateAtom(environmentId);
   const canUpdate = useAtomValue(sessionStateAtom, canUpdateServer);
   const updatesDenial = managedUpdatesDenial(useManagedPolicy(environmentId));
   const update = useServerUpdate();
-  const updatesInstall = installation?.kind === "npm-global" || installation?.kind === "standalone";
+  const updatesInstall =
+    installation?.kind === "npm-global" || installation?.kind === "t3-launcher";
   const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
     target: updatesInstall ? "update command" : "relaunch command",
     onCopy: ({ command }) => {
@@ -350,9 +350,7 @@ export function ServerUpdateAction({
   }
 
   const manualCommand =
-    selfUpdate === null
-      ? manualServerUpdateCommand(targetVersion, installation, environment?.platform.os)
-      : null;
+    selfUpdate === null ? manualServerUpdateCommand(targetVersion, installation) : null;
   const actionLabel =
     manualCommand !== null
       ? updatesInstall

@@ -12,7 +12,6 @@ import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
-import packageJson from "../../package.json" with { type: "json" };
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
   PUBLISH_AGENT_ACTIVITY_SECRET,
@@ -90,17 +89,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         '{"name":"t3","version":"0.0.45","bin":{"t3":"./dist/bin.mjs"}}',
       );
       yield* fs.symlink(entry, `${prefix}/bin/t3`);
-      const runtimeDir = `${baseDir}/runtime/versions/${packageJson.version}`;
-      const runtime = `${runtimeDir}/t3`;
-      yield* fs.makeDirectory(runtimeDir, { recursive: true });
-      yield* fs.writeFileString(runtime, "");
       const config = yield* makeServerConfig(baseDir);
       yield* fs.makeDirectory(config.stateDir, { recursive: true });
-      for (const [mode, executable, installation] of [
-        ["web", false, { kind: "npm-global", prefix }],
-        ["web", true, { kind: "standalone", baseDir }],
-        ["desktop", false, undefined],
-      ] as const) {
+      for (const mode of ["web", "desktop"] as const) {
         const descriptor = yield* Effect.gen(function* () {
           const environment = yield* ServerEnvironment.ServerEnvironment;
           return yield* environment.getDescriptor;
@@ -111,13 +102,14 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
               Layer.provide(ServerConfig.layer({ ...config, mode })),
             ),
           ),
-          Effect.provideService(HostProcess.Arguments, executable ? [runtime] : ["node", entry]),
-          Effect.provideService(HostProcess.ExecutablePath, runtime),
-          Effect.provideService(HostProcess.IsExecutable, executable),
+          Effect.provideService(HostProcess.Arguments, ["node", entry]),
+          Effect.provideService(HostProcess.IsExecutable, false),
           Effect.provideService(HostProcess.Platform, "linux"),
           Effect.provideService(HostProcess.Environment, {}),
         );
-        expect(descriptor.capabilities.serverInstallation).toEqual(installation);
+        expect(descriptor.capabilities.serverInstallation).toEqual(
+          mode === "web" ? { kind: "npm-global", prefix } : undefined,
+        );
         expect(descriptor.capabilities.serverSelfUpdate).toBe(
           mode === "web" ? undefined : "desktop-managed",
         );
