@@ -197,7 +197,7 @@ const APPIMAGE_MOUNT_SEGMENT = /(?:^|\/)\.mount_[^/]+(?:\/|$)/u;
 
 const withoutAppImageMounts = (platform: NodeJS.Platform, value: string): string => {
   if (platform === "win32") return value;
-  const delimiter = pathDelimiter(platform);
+  const delimiter = ":";
   return value
     .split(delimiter)
     .filter((entry) => !APPIMAGE_MOUNT_SEGMENT.test(entry.trim()))
