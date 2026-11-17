@@ -676,6 +676,8 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
           timeoutMs: 10_000,
         });
         yield* git(tmp, ["config", "gpg.format", "ssh"]);
+        // A global signer such as 1Password's cannot use the fixture's generated key.
+        yield* git(tmp, ["config", "gpg.ssh.program", "ssh-keygen"]);
         yield* git(tmp, ["config", "user.signingkey", `${signingKey}.pub`]);
         yield* git(tmp, ["config", "log.showSignature", "true"]);
         const checkpointStore = yield* CheckpointStore.CheckpointStore;
