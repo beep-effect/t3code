@@ -195,20 +195,6 @@ const mergePaths = (
     ),
   );
 
-// An AppImage mounts itself at a fresh `.mount_*` directory on every launch. A cached entry
-// outlives that mount, and exec through a dead FUSE mount fails with ENOTCONN instead of
-// falling through to later PATH entries, so `#!/usr/bin/env bash` scripts stop starting.
-const APPIMAGE_MOUNT_SEGMENT = /(?:^|\/)\.mount_[^/]+(?:\/|$)/u;
-
-const withoutAppImageMounts = (platform: NodeJS.Platform, value: string): string => {
-  if (platform === "win32") return value;
-  const delimiter = ":";
-  return value
-    .split(delimiter)
-    .filter((entry) => !APPIMAGE_MOUNT_SEGMENT.test(entry.trim()))
-    .join(delimiter);
-};
-
 const knownWindowsCliDirs = (env: NodeJS.ProcessEnv): ReadonlyArray<string> => [
   ...trimNonEmpty(env.APPDATA).pipe(
     Option.match({
@@ -744,7 +730,6 @@ export const make = Effect.gen(function* () {
         const cached = Object.fromEntries(
           CACHED_ENV_NAMES.flatMap((name) => (fresh[name] ? [[name, fresh[name]]] : [])),
         );
-        if (cached.PATH) cached.PATH = withoutAppImageMounts(environment.platform, cached.PATH);
         const persist = Effect.gen(function* () {
           const encoded = yield* encodeCache({ version: 1, key, environment: cached });
           yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
@@ -800,15 +785,12 @@ export const make = Effect.gen(function* () {
         );
         stripAppImagePaths(cached);
         const baseline = { ...inherited };
-        // Caches written before mounts were stripped still name a previous launch's mount.
-        const cachedPath = cached.PATH && withoutAppImageMounts(environment.platform, cached.PATH);
+        const cachedPath = cached.PATH;
         if (cachedPath) {
           cached.PATH = Option.getOrElse(
             mergePaths(environment.platform, [Option.some(cachedPath), readEnvPath(inherited)]),
             () => cachedPath,
           );
-        } else {
-          delete cached.PATH;
         }
         applyShellEnvironment(baseline, cached, environment.platform);
         yield* publish(
