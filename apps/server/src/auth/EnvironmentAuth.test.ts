@@ -529,6 +529,69 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
       }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
     );
 
+    it.effect("renews a peer link's session while it is used, and no other MCP client's", () =>
+      Effect.gen(function* () {
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const day = 24 * 60 * 60 * 1000;
+        const lifetime = 180;
+        const issue = (peerLink: boolean) =>
+          serverAuth.issueMcpClientSession({
+            label: peerLink ? "T3 Code · A" : "ChatGPT",
+            access: "auto",
+            peerLink,
+            client: requestMetadata,
+          });
+        const use = (session: { readonly token: string }) =>
+          serverAuth.authenticateMcpClient(makeBearerRequest(session.token)).pipe(
+            Effect.map((client) => client.linkExpiresAt?.epochMilliseconds ?? null),
+            Effect.catchTags({
+              ServerAuthInvalidCredentialError: () => Effect.succeed("refused" as const),
+            }),
+          );
+        const listedExpiry = (session: { readonly sessionId: string }) =>
+          serverAuth
+            .listSessions()
+            .pipe(
+              Effect.map(
+                (sessions) =>
+                  sessions.find((listed) => listed.sessionId === session.sessionId)?.expiresAt
+                    .epochMilliseconds,
+              ),
+            );
+        const issuedAt = (yield* DateTime.now).epochMilliseconds;
+        const used = yield* issue(true);
+        const idle = yield* issue(true);
+        const revoked = yield* issue(true);
+        const outside = yield* issue(false);
+
+        // Within a day of its full lifetime, a call leaves the session row alone.
+        yield* TestClock.adjust("12 hours");
+        expect(yield* use(used)).toBe(issuedAt + lifetime * day);
+        expect(yield* listedExpiry(used)).toBe(issuedAt + lifetime * day);
+
+        yield* TestClock.adjust("468 hours");
+        expect(yield* use(used)).toBe(issuedAt + (20 + lifetime) * day);
+        expect(yield* listedExpiry(used)).toBe(issuedAt + (20 + lifetime) * day);
+        expect(yield* use(outside)).toBeNull();
+        expect(yield* listedExpiry(outside)).toBe(issuedAt + lifetime * day);
+        expect(yield* serverAuth.revokeSession(revoked.sessionId)).toBe(true);
+        expect(yield* use(revoked)).toBe("refused");
+
+        // Past the token's own lifetime, so only the renewal keeps the used link.
+        yield* TestClock.adjust(`${lifetime - 10} days`);
+        expect(yield* use(used)).toBe(issuedAt + (2 * lifetime + 10) * day);
+        expect(yield* use(idle)).toBe("refused");
+        expect(yield* use(outside)).toBe("refused");
+        expect(yield* use(revoked)).toBe("refused");
+        expect(yield* listedExpiry(idle)).toBeUndefined();
+        expect(yield* listedExpiry(revoked)).toBeUndefined();
+
+        // Renewed links still end a full lifetime after their last use.
+        yield* TestClock.adjust(`${lifetime} days`);
+        expect(yield* use(used)).toBe("refused");
+      }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
+    );
+
     it.effect("preserves pairing grants after rejecting scopes they do not grant", () =>
       Effect.gen(function* () {
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -800,12 +863,26 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
           const clientsBeforeRevoke = yield* serverAuth.listClientSessions(
             administrativeSession.sessionId,
           );
+          const unspentCode = yield* serverAuth.issuePairingCredential({ label: "unspent" });
+          const unspentApproval = yield* serverAuth.issuePairingCredential({
+            access: "read-only",
+          });
           const revokedCount = yield* serverAuth.revokeOtherClientSessions(
             administrativeSession.sessionId,
           );
           const clientsAfterRevoke = yield* serverAuth.listClientSessions(
             administrativeSession.sessionId,
           );
+          expect(
+            (yield* serverAuth
+              .createBrowserSession(unspentCode.credential, requestMetadata)
+              .pipe(Effect.exit))._tag,
+          ).toBe("Failure");
+          expect(
+            (yield* serverAuth
+              .consumeMcpApprovalCode(unspentApproval.credential, "read-only")
+              .pipe(Effect.exit))._tag,
+          ).toBe("Failure");
 
           expect(listedPairingLinks.map((entry) => entry.id)).toContain(pairingCredential.id);
           expect(listedPairingLinks.find((entry) => entry.id === pairingCredential.id)?.label).toBe(
