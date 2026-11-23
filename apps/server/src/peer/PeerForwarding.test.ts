@@ -389,7 +389,17 @@ const makeLaptop = Effect.gen(function* () {
         ),
         Effect.provideService(McpSchema.McpServerClient, mcpClient),
       );
-  return { links: Context.get(linking, PeerLinks.PeerLinks), call };
+  const callAsClient = (name: string, args: Record<string, unknown>) =>
+    server.callTool({ name, arguments: args }).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, {
+        ...scopeOf("outside-client"),
+        requestNamespace: "client:session-1",
+        thread: undefined,
+        client: { sessionId: "session-1", label: "claude.ai", access: "read-only" },
+      }),
+      Effect.provideService(McpSchema.McpServerClient, mcpClient),
+    );
+  return { links: Context.get(linking, PeerLinks.PeerLinks), call, callAsClient };
 });
 
 const failureOf = (result: McpSchema.CallToolResult) => {
@@ -647,13 +657,19 @@ it.effect("runs any tool that takes a linked environment there", () =>
       });
       expect(archived.isError).toBe(false);
       expect((yield* Ref.get(seen)).stops).toEqual([`thread.archive ${boxThread}`]);
-      // A cursorless read from an agent here gets the newest page there, as it does locally.
+      // A cursorless read from here gets the newest page there, as it does locally.
       const read = yield* a.call("thread:laptop-full", "t3_thread_read", {
         environmentId: box.environmentId,
         threadId: boxThread,
       });
       expect(read.isError).toBe(false);
+      const clientRead = yield* a.callAsClient("t3_thread_read", {
+        environmentId: box.environmentId,
+        threadId: boxThread,
+      });
+      expect(clientRead.isError).toBe(false);
       expect((yield* Ref.get(seen)).reads).toEqual([
+        { beforePosition: Number.MAX_SAFE_INTEGER, limit: 10, view: "messages" },
         { beforePosition: Number.MAX_SAFE_INTEGER, limit: 10, view: "messages" },
       ]);
 
@@ -768,7 +784,7 @@ it.effect("refuses a launch there above the link's access, naming the link", () 
       expect((yield* Ref.get(seen)).launches).toEqual([]);
 
       // Once the link has expired, that is what the agent needs to hear.
-      yield* TestClock.adjust(Duration.days(31));
+      yield* TestClock.adjust(Duration.days(181));
       expect(failureOf(yield* launchAboveLink).message).toContain("expired");
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
